@@ -18,3 +18,10 @@ make
 ```
 source env.sh
 ```
+
+4. Test with
+```
+tree-sitter parse tests/001-comment.sh
+```
+(The `tree-sitter` example must be separately installed; ours is in
+`~cs3214/bin`)

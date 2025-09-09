@@ -2,7 +2,7 @@
 # tree-sitter looks for config.json in the directory pointed to by
 # $TREE_SITTER_DIR
 #
-export TREE_SITTER_DIR=$(dirname $(realpath $0))
+export TREE_SITTER_DIR=$(dirname $(realpath -- "${BASH_SOURCE[0]}"))
 
 cat > ${TREE_SITTER_DIR}/config.json << EOF
 {
