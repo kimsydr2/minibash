@@ -3,8 +3,9 @@ How to build minibash
 ---------------------
 
 1. Build libtommy
-
+```
 (cd tommyds; make)
+```
 
 2. Build minibash
 
