@@ -7,14 +7,19 @@ How to build minibash
 (cd tommyds; make)
 ```
 
-2. Build minibash
+2. Build libtree-sitter.a
+```
+(cd tree-sitter; make)
+```
+
+3. Build minibash
 
 ```
 cd src
 make
 ```
 
-3. To use the tree-sitter CLI tool, it is recommended to 
+4. To use the tree-sitter CLI tool, it is recommended to
 ```
 source env.sh
 ```
