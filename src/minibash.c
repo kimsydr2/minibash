@@ -28,6 +28,8 @@
 #include "utils.h"
 #include "list.h"
 #include "ts_helpers.h"
+#include <spawn.h>
+#include <sys/stat.h>
 
 /* These are field ids suitable for use in ts_node_child_by_field_id for certain rules. 
    e.g., to obtain the body of a while loop, you can use:
@@ -44,6 +46,12 @@ static tommy_hashdyn shell_vars;        // a hash table containing the internal 
 static void handle_child_status(pid_t pid, int status);
 static char *read_script_from_fd(int readfd);
 static void execute_script(char *script);
+
+extern char **environ;
+static void execute_command(TSNode command_node);
+static int last_exit_status = 0;  // Track exit status of last command
+
+
 
 
 static void
@@ -231,6 +239,154 @@ wait_for_job(struct job *job)
 }
 
 
+/**
+ * Execute a simple command using posix_spawn.
+ * Handles both absolute paths and PATH lookup.
+ */
+static void execute_command(TSNode command_node)
+{
+    TSNode name_node = ts_node_child_by_field_id(command_node, nameId);
+    if (ts_node_is_null(name_node)) {
+        name_node = ts_node_named_child(command_node, 0);
+    }
+    
+    if (ts_node_is_null(name_node)) {
+        fprintf(stderr, "Error: No command name found\n");
+        return;
+    }
+    
+    char *cmd_name = ts_extract_node_text(input, name_node);
+
+    
+    uint32_t child_count = ts_node_named_child_count(command_node);
+    char **argv = calloc(child_count + 1, sizeof(char*));
+    if (!argv) {
+        fprintf(stderr, "Memory allocation failed\n");
+        free(cmd_name);
+        return;
+    }
+    
+    argv[0] = cmd_name;
+    int argv_index = 1;
+    
+    
+    for (uint32_t i = 1; i < child_count; i++) {
+        TSNode child = ts_node_named_child(command_node, i);
+        const char *type = ts_node_type(child);
+        
+        
+        char *arg_text = NULL;
+        
+        if (strcmp(type, "word") == 0) {
+            arg_text = ts_extract_node_text(input, child);
+        }
+        else if (strcmp(type, "string") == 0) {
+            uint32_t string_child_count = ts_node_child_count(child);
+            for (uint32_t j = 0; j < string_child_count; j++) {
+                TSNode string_child = ts_node_child(child, j);
+                if (strcmp(ts_node_type(string_child), "string_content") == 0) {
+                    arg_text = ts_extract_node_text(input, string_child);
+                    break;
+                }
+            }
+            if (arg_text == NULL) {
+                arg_text = strdup(""); 
+            }
+        }
+        else if (strcmp(type, "raw_string") == 0) {
+            char *with_quotes = ts_extract_node_text(input, child);
+            size_t len = strlen(with_quotes);
+            if (len >= 2) {
+                arg_text = strndup(with_quotes + 1, len - 2);
+            } else {
+                arg_text = strdup("");
+            }
+            free(with_quotes);
+        }
+        else if (strcmp(type, "number") == 0) {
+            arg_text = ts_extract_node_text(input, child);
+        }
+else if (strcmp(type, "simple_expansion") == 0) {
+    // Handle $? and other special variables
+    // The structure: simple_expansion -> $ -> special_variable_name
+    TSNode var_node = ts_node_child(child, 1);
+    
+    if (!ts_node_is_null(var_node)) {
+        const char *var_type = ts_node_type(var_node);
+        
+        if (strcmp(var_type, "special_variable_name") == 0) {
+            char *var_text = ts_extract_node_text(input, var_node);
+            if (strcmp(var_text, "?") == 0) {
+                arg_text = malloc(12);
+                snprintf(arg_text, 12, "%d", last_exit_status);
+            }
+            free(var_text);
+        }
+    }
+    if (arg_text == NULL) {
+        arg_text = ts_extract_node_text(input, child);
+    }
+}
+        if (arg_text != NULL) {
+            argv[argv_index++] = arg_text;
+        }
+    } 
+    
+    argv[argv_index] = NULL;
+    
+    if (strcmp(cmd_name, "true") == 0) {
+        last_exit_status = 0;
+        for (int i = 0; i < argv_index; i++) {
+            free(argv[i]);
+        }
+        free(argv);
+        return;
+    }
+    if (strcmp(cmd_name, "false") == 0) {
+        last_exit_status = 1;
+        for (int i = 0; i < argv_index; i++) {
+            free(argv[i]);
+        }
+        free(argv);
+        return;
+    }
+    
+    struct job *job = allocate_job(true);
+    job->status = FOREGROUND;
+    job->num_processes_alive = 1;
+    
+    pid_t pid;
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&attr, 0);
+    
+    int spawn_result;
+    if (cmd_name[0] == '/') {
+        spawn_result = posix_spawn(&pid, cmd_name, NULL, &attr, argv, environ);
+    } else {
+        spawn_result = posix_spawnp(&pid, cmd_name, NULL, &attr, argv, environ);
+    }
+    
+    posix_spawnattr_destroy(&attr);
+    
+    if (spawn_result != 0) {
+        fprintf(stderr, "minibash: %s: command not found\n", cmd_name);
+        last_exit_status = 127;
+        job->status = TERMINATED_VIA_EXIT;
+        job->num_processes_alive = 0;
+        delete_job(job, true);
+    } else {
+        wait_for_job(job);
+        delete_job(job, true);
+    }
+    
+    for (int i = 0; i < argv_index; i++) {
+        free(argv[i]);
+    }
+    free(argv);
+} 
+
 static void
 handle_child_status(pid_t pid, int status)
 {
@@ -245,8 +401,34 @@ handle_child_status(pid_t pid, int status)
      *         num_processes_alive if appropriate.
      *         If a process was stopped, save the terminal state.
      */
-
+    // todo 9/19:
+    // 1. Find which job this pid belongs to
+    // 2. Update that specific job's status
+    // 3. Decrement num_processes_alive
+    
+    assert(signal_is_blocked(SIGCHLD));
+    
+    struct list_elem *e;
+    for (e = list_begin(&job_list); e != list_end(&job_list); e = list_next(e)) {
+        struct job *job = list_entry(e, struct job, elem);
+        
+        if (job->status == FOREGROUND) {
+            if (WIFEXITED(status)) {
+                last_exit_status = WEXITSTATUS(status);
+                job->status = TERMINATED_VIA_EXIT;
+                job->num_processes_alive--;
+            } else if (WIFSIGNALED(status)) {
+                last_exit_status = 128 + WTERMSIG(status);
+                job->status = TERMINATED_VIA_SIGNAL;
+                job->num_processes_alive--;
+            } else if (WIFSTOPPED(status)) {
+                job->status = STOPPED;
+            }
+            break;
+        }
+    }
 }
+
 
 /*
  * Run a program.
@@ -260,10 +442,17 @@ run_program(TSNode program)
     uint32_t n = ts_node_named_child_count(program);
     for (uint32_t i = 0; i < n; i++) {
         TSNode child = ts_node_named_child(program, i);
-        printf("node type `%s` not implemented\n", ts_node_type(child));
+        const char *type = ts_node_type(child);
+        
+        if (strcmp(type, "command") == 0) {
+            execute_command(child);
+        } else if (strcmp(type, "comment") == 0) {
+            continue;
+        } else {
+            printf("node type `%s` not implemented\n", type);
+        }
     }
 }
-
 /*
  * Read a script from this (already opened) file descriptor,
  * return a newly allocated buffer.
@@ -384,3 +573,4 @@ main(int ac, char *av[])
     tommy_hashdyn_done(&shell_vars);
     return EXIT_SUCCESS;
 }
+
