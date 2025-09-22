@@ -98,21 +98,6 @@ static int kv_cmp(const void *a, const void *b) {
     return strcmp(p->k, key);
 }
 
-static void var_set(const char *k, const char *v) {
-    tommy_node *n = tommy_hashdyn_search(&shell_vars, kv_cmp, k, kv_hash(k));
-    if (n) {
-        struct kv *p = n->data;
-        free(p->v);
-        p->v = strdup(v ? v : "");
-	setenv(k, p->v, 1);
-        return;
-    }
-    struct kv *p = calloc(1, sizeof *p);
-    p->k = strdup(k);
-    p->v = strdup(v ? v : "");
-    tommy_hashdyn_insert(&shell_vars, &p->node, p, kv_hash(p->k));
-    setenv(p->k, p->v, 1);
-}
 
 static const char *var_get(const char *k) {
     tommy_node *n = tommy_hashdyn_search(&shell_vars, kv_cmp, k, kv_hash(k));
@@ -128,9 +113,8 @@ static void kv_free(void *vp) {
     free(p);
 }
 static char *command_subst_to_text(TSNode cs) {
-// TODO(next): verify concatenation with surrounding word segments (040)
-// Consider collapsing multiple spaces/newlines if tests require it (keep exactly bash-like).
-    
+    /* cs is a command_substitution node: we’ll extract the inside source and run /bin/sh -c */
+    uint32_t n = ts_node_child_count(cs);
     /* Grab the full text of the node and strip $() or backticks by scanning children; simplest is:
        use start/end byte positions to slice from input, then heuristically strip "$(" .. ")" or '`' .. '`'.
        Safer: find the child that is the command body: often named 'command' or 'list'.
@@ -697,9 +681,6 @@ static char **build_argv_from_command(TSNode command_node, int *argc_out)
 }
 
 static void collect_redirs(TSNode redirected_stmt, struct redir_spec *r)
-// TODO(next): detect numeric-fd redirects (e.g., 2>, 2>>), not just generic file_redirect.
-// TODO(next): support |& (stderr+stdout to pipe) via a flag propagated into spawn_stage.
-
 {
     memset(r, 0, sizeof(*r));
 
@@ -778,9 +759,6 @@ static int spawn_stage(const char *cmd0, char *const argv[],
                        const struct redir_spec *r,
                        pid_t pgid_in, pid_t *out_pid,
                        int pipes[][2], int npipes)
-
-// TODO(next): if r specifies fd==2 redirection, dup2 to STDERR_FILENO (2) accordingly.
-// TODO(next): support append/trunc modes for stderr similarly to stdout.
 
 {
     posix_spawn_file_actions_t fa;
@@ -867,16 +845,6 @@ static void execute_pipeline(TSNode pipeline, const struct redir_spec *opt_r)
     if (m == 0) return;
 
     bool pipe_ampersand = false; // TODO
-
-    uint32_t rc = ts_node_child_count(pipeline);
-    for (uint32_t i = 0; i < rc; i++){
-        TSNode c = ts_node_child(pipeline, i);
-        if (ts_node_is_named(c)) continue;
-        char *tok = ts_extract_node_text(input, c);
-        if (tok && strcmp(tok, "|&") == 0) pipe_ampersand = true;
-        free(tok);
-    }
-
 
     int npipes = (m > 1) ? (int)(m - 1) : 0;
     int pipes[64][2];
@@ -1003,10 +971,6 @@ handle_child_status(pid_t pid, int status)
  */
 static void 
 run_program(TSNode program)
-// TODO(next): handle 'list' nodes: &&, ||, ; with short-circuiting (070,071)
-// TODO(next): implement 'if' (090–095) using conditionId/bodyId
-// TODO(next): implement 'for' and 'while' loops and 'break' (100,104,200,201)
-
 {
     uint32_t n = ts_node_named_child_count(program);
     for (uint32_t i = 0; i < n; i++) {

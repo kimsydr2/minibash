@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Robust local test harness for minibash
+# Usage:
+#   tests/runtests              # run all tests
+#   tests/runtests 050 060      # run numbers
+#   tests/runtests -v 050 060   # verbose (show diffs for failures)
+
+set -u -o pipefail
+
+VERBOSE=0
+if [[ "${1-}" == "-v" ]]; then
+  VERBOSE=1
+  shift
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BIN="$ROOT/src/minibash"
+TESTDIR="$ROOT/tests"
+GOTDIR="$TESTDIR/_got"
+mkdir -p "$GOTDIR"
+
+if [[ ! -x "$BIN" ]]; then
+  echo "minibash binary not found at $BIN; build it first (cd src && make)" >&2
+  exit 2
+fi
+
+run_one() {
+  local shfile="$1"
+  local base="${shfile%.sh}"
+  local out="${base}.out"
+  local got="$GOTDIR/$(basename "${base}").got"
+
+  # Run: capture stdout+stderr; never abort on non-zero
+  "$BIN" "$shfile" >"$got" 2>&1 || true
+
+  if diff -u "$out" "$got" >/dev/null; then
+    printf 'PASS %s\n' "$(basename "$shfile")"
+    return 0
+  else
+    printf 'FAIL %s\n' "$(basename "$shfile")"
+    if [[ $VERBOSE -eq 1 ]]; then
+      diff -u "$out" "$got" || true
+    fi
+    return 1
+  fi
+}
+
+# Build candidate list (dedupe)
+declare -a candidates=()
+declare -A seen=()
+
+if [[ $# -gt 0 ]]; then
+  for n in "$@"; do
+    for f in "$TESTDIR/${n}-"*.sh "$TESTDIR/${n}"*.sh; do
+      [[ -f "$f" ]] || continue
+      if [[ -z "${seen[$f]-}" ]]; then
+        candidates+=("$f")
+        seen[$f]=1
+      fi
+    done
+  done
+else
+  while IFS= read -r -d '' f; do
+    [[ -f "$f" ]] || continue
+    candidates+=("$f")
+  done < <(find "$TESTDIR" -maxdepth 1 -name '*.sh' -print0 | sort -z)
+fi
+
+total=0; pass=0; fail=0
+for t in "${candidates[@]}"; do
+  ((total++))
+  if run_one "$t"; then
+    ((pass++))
+  else
+    ((fail++))
+  fi
+done
+
+printf '\nSummary: %d/%d passed, %d failed.\n' "$pass" "$total" "$fail"
+exit $(( fail == 0 ? 0 : 1 ))

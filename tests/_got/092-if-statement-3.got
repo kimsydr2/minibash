@@ -1,0 +1,28 @@
+$bintrue
+$bintrue
+minibash.c:98:19: runtime error: null pointer passed as argument 1, which is declared to never be null
+/usr/include/string.h:157:33: note: nonnull attribute specified here
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior minibash.c:98:19 
+UndefinedBehaviorSanitizer:DEADLYSIGNAL
+==1704712==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x000000000000 (pc 0x7fdd0ef6f3d6 bp 0x7ffe6b10d3e0 sp 0x7ffe6b10d398 T1704712)
+==1704712==The signal is caused by a READ memory access.
+==1704712==Hint: address points to the zero page.
+    #0 0x7fdd0ef6f3d6 in __strcmp_evex (/lib64/libc.so.6+0x16f3d6) (BuildId: 75f3a24a949c930bc4c54258ba53a9c8690e0174)
+    #1 0x00000043e38b in kv_cmp /home/grads/golsa/minibash/src/minibash.c:98:12
+    #2 0x00000043e1ab in tommy_hashdyn_search /home/grads/golsa/minibash/src/../tommyds/tommyhashdyn.h:229:25
+    #3 0x0000004360ca in var_set /home/grads/golsa/minibash/src/minibash.c:102:21
+    #4 0x000000434822 in run_program /home/grads/golsa/minibash/src/minibash.c:1018:20
+    #5 0x00000043387a in execute_script /home/grads/golsa/minibash/src/minibash.c:1140:5
+    #6 0x000000432faf in main /home/grads/golsa/minibash/src/minibash.c:1216:9
+    #7 0x7fdd0ee2a60f in __libc_start_call_main (/lib64/libc.so.6+0x2a60f) (BuildId: 75f3a24a949c930bc4c54258ba53a9c8690e0174)
+    #8 0x7fdd0ee2a6bf in __libc_start_main@GLIBC_2.2.5 (/lib64/libc.so.6+0x2a6bf) (BuildId: 75f3a24a949c930bc4c54258ba53a9c8690e0174)
+    #9 0x0000004057b4 in _start (/home/grads/golsa/minibash/src/minibash+0x4057b4) (BuildId: 0bd21d09903205550c040ed398d33aa9abf720a3)
+
+==1704712==Register values:
+rax = 0x000000000d000000  rbx = 0x0000000000000000  rcx = 0x0000000000000000  rdx = 0x0000000000000000  
+rdi = 0x0000000000000000  rsi = 0x00000000014fa0d0  rbp = 0x00007ffe6b10d3e0  rsp = 0x00007ffe6b10d398  
+ r8 = 0x000000000000007c   r9 = 0x0000000000000000  r10 = 0x00000000ffffff00  r11 = 0x0000000000000246  
+r12 = 0x00007ffe6b10da58  r13 = 0x0000000000432928  r14 = 0x000000000061e668  r15 = 0x00007fdd0f2db000  
+UndefinedBehaviorSanitizer can not provide additional info.
+SUMMARY: UndefinedBehaviorSanitizer: SEGV (/lib64/libc.so.6+0x16f3d6) (BuildId: 75f3a24a949c930bc4c54258ba53a9c8690e0174) in __strcmp_evex
+==1704712==ABORTING
