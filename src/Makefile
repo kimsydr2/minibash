@@ -32,4 +32,3 @@ clean:
 	rm -f $(OBJECTS) $(TREE_SITTER_OBJECTS) minibash minibash.o \
 		core.*
 
- BASE_CFLAGS=-Wall -Werror -gdwarf-4 -O0 -fsanitize=undefined -I${TREE_SITTER_DIR}/lib/include -I${TREE_SITTER_BASH_DIR}/src -DPLAIN -I.. -DMB_DEBUG

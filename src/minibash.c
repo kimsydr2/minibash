@@ -156,6 +156,7 @@ static char *command_subst_to_text(TSNode cs) {
     } else {
         inner = raw; /* unknown wrapper; try as-is */
     }
+    DBG("Running command substitution: %s\n", inner);  // ADD HERE
 
     /* Run /bin/sh -c "<inner>" and capture stdout */
     int p[2]; if (pipe(p) != 0) return strdup("");
@@ -187,6 +188,8 @@ static char *command_subst_to_text(TSNode cs) {
     else buf[len] = 0;
 
     int status; waitpid(pid, &status, 0);
+        DBG("Command substitution result: len=%zu, content='%s'\n", len, buf);  // ADD HERE
+
     free(inner);
 
     /* Trim one trailing newline (bash behavior in command substitution) */
