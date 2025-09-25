@@ -17,10 +17,14 @@
 #include "ts_symbols.h"
 #include <assert.h>
 #include <errno.h>
+
 #include <fcntl.h>
+
+#include <stdio.h>
 #include <readline/readline.h>
 #include <stdbool.h>
-#include <stdio.h>
+
+
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -40,9 +44,9 @@
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/stat.h>
-static inline void	set_cloexec(int fd)
+static inline void set_cloexec(int fd)
 {
-	int	flags;
+	int flags;
 
 	if (fd >= 0)
 	{
@@ -56,9 +60,8 @@ static inline void	set_cloexec(int fd)
    e.g., to obtain the body of a while loop, you can use:
 	TSNode body = ts_node_child_by_field_id(child, bodyId);
 */
-static TSFieldId bodyId, redirectId, destinationId, valueId, nameId,
-	conditionId;
-static TSFieldId		variableId;
+static TSFieldId bodyId, redirectId, destinationId, valueId, nameId, conditionId;
+static TSFieldId variableId;
 static TSFieldId leftId, operatorId, rightId;
 
 static char *input;              // to avoid passing the current input around
@@ -66,20 +69,20 @@ static TSParser *parser;         // a singleton parser instance
 static tommy_hashdyn shell_vars;
 	// a hash table containing the internal shell variables
 
-static void				handle_child_status(pid_t pid, int status);
-static char				*read_script_from_fd(int readfd);
-static void				execute_script(char *script);
-extern char				**environ;
+static void handle_child_status(pid_t pid, int status);
+static char *read_script_from_fd(int readfd);
+static void execute_script(char *script);
+extern char **environ;
 
-static void				execute_command(TSNode command_node);
-static int				last_exit_status = 0;
+static void execute_command(TSNode command_node);
+static int last_exit_status = 0;
 					// Track exit status of last command
 
-static unsigned long	khash(const void *key)
+static unsigned long khash(const void *key)
 {
 	return (tommy_hash_u32(0, key, strlen((const char *)key)));
 }
-static char	*str_cat3(char *a, const char *b)
+static char *str_cat3(char *a, const char *b)
 {
 	size_t	la = strlen(a), lb;
 
@@ -93,36 +96,34 @@ static char	*str_cat3(char *a, const char *b)
 	return (a);
 }
 /* expansions & vars */
-static char				*expand_node_to_text(TSNode n);
-static char				*command_subst_to_text(TSNode cs);
-static const char		*var_get(const char *k);
-static void				var_set(const char *k, const char *v);
+static char *expand_node_to_text(TSNode n);
+static char *command_subst_to_text(TSNode cs);
+static const char *var_get(const char *k);
+static void var_set(const char *k, const char *v);
 
-struct					kv
+struct	kv
 {
-	tommy_node			node;
-	char				*k;
-	char				*v;
+	tommy_node node;
+	char *k;
+	char *v;
 };
 
 static unsigned	kv_hash(const char *s)
 {
 	return (tommy_hash_u32(0, s, (unsigned)strlen(s)));
 }
-static int	kv_cmp(const void *a, const void *b)
-{
-	const struct kv	*p = (const struct kv *)a;
-	const char		*key = (const char *)b;
 
-	if (!p || !p->k || !key)
-		return (-1);
-	return (strcmp(p->k, key));
+static int kv_cmp(const void *a, const void *b)
+{
+    const struct kv *p = (const struct kv *)a;  // node->data
+    const char *key = (const char *)b;          // the lookup key
+    if (!p || !p->k || !key) return -1;
+    return strcmp(p->k, key);
 }
 
-static void	var_set(const char *k, const char *v)
+static void var_set(const char *k, const char *v)
 {
 	tommy_node	*n;
-	struct kv	*p;
 	struct kv	*p;
 
 	if (!k)
@@ -143,7 +144,7 @@ static void	var_set(const char *k, const char *v)
 	setenv(p->k, p->v, 1);
 }
 
-static const char	*var_get(const char *k)
+static const char *var_get(const char *k)
 {
 	tommy_node	*n;
 	const char	*e = getenv(k);
@@ -156,33 +157,36 @@ static const char	*var_get(const char *k)
 	return (e ? e : "");
 }
 
-static void	kv_free(void *vp)
+static void kv_free(void *vp)
 {
-	struct kv	*p;
+	struct kv *p;
 
 	p = vp;
 	free(p->k);
 	free(p->v);
 	free(p);
 }
-static char	*command_subst_to_text(TSNode cs)
+static char *command_subst_to_text(TSNode cs)
 {
 	uint32_t					start;
 	uint32_t					end;
 	char						*raw;
-	char						*inner;
-	size_t						L;
-	int							p[2];
-	pid_t						pid;
-	posix_spawn_file_actions_t	fa;
-	posix_spawnattr_t			attr;
-	char						*argv[] = {"sh", "-c", inner, NULL};
-	int							rc;
-	char						*buf;
-	size_t						cap = 0, len;
-	char						tmp[4096];
-	ssize_t						r;
-	int							status;
+
+	char *inner = NULL;
+
+
+	size_t	L;
+	int p[2];
+	pid_t pid;
+	posix_spawn_file_actions_t fa;
+	posix_spawnattr_t attr;
+//	char *argv[] = {"sh", "-c", inner, NULL};
+	int	rc;
+	char	*buf;
+	size_t	cap = 0, len;
+	char	tmp[4096];
+	ssize_t	r;
+	int status;
 
 	// TODO(next): verify concatenation with surrounding word segments (040)
 	// Consider collapsing multiple spaces/newlines if tests require it (keep exactly bash-like).
@@ -217,11 +221,15 @@ static char	*command_subst_to_text(TSNode cs)
 	/* Run /bin/sh -c "<inner>" and capture stdout */
 	if (pipe(p) != 0)
 		return (strdup(""));
+	char *argv[] = { "sh", "-c", inner, NULL };
+
+	
 	posix_spawn_file_actions_init(&fa);
 	posix_spawnattr_init(&attr);
 	posix_spawn_file_actions_adddup2(&fa, p[1], STDOUT_FILENO);
 	posix_spawn_file_actions_addclose(&fa, p[0]);
 	posix_spawn_file_actions_addclose(&fa, p[1]);
+
 	rc = posix_spawnp(&pid, "sh", &fa, &attr, argv, environ);
 	posix_spawn_file_actions_destroy(&fa);
 	posix_spawnattr_destroy(&attr);
@@ -269,40 +277,12 @@ static char	*command_subst_to_text(TSNode cs)
 static char	*expand_node_to_text(TSNode n)
 {
 	const char	*t = ts_node_type(n);
-	char		*withq;
-	size_t		len;
-	char		*s;
-	char		*out;
-	uint32_t	sc;
-	TSNode		c;
-			const char *ct = ts_node_type(c);
-	char		*s;
-	TSNode		inner;
-	char		*val;
-					const char *it = ts_node_type(inner);
-	char		*nm;
-							char buf[16];
-	char		*nm;
-	TSNode		var_node;
-	char		*val;
-					const char *vt = ts_node_type(var_node);
-	char		*nm;
-	char		*s;
-	TSNode		inner;
-			const char *it = ts_node_type(inner);
-	char		*nm;
-	char		*s;
-					char buf[16];
-	char		*nm;
-	char		*s;
-	TSNode		var_node;
-			const char *vt = ts_node_type(var_node);
-	char		*nm;
-					const char *val = var_get(nm);
-	uint32_t	sc;
-	char		*out;
-	TSNode		c;
-	char		*part;
+
+	char *withq, *s = NULL, *out = NULL, *part = NULL;
+
+	size_t len;
+	uint32_t sc;
+	TSNode c, inner, var_node;
 
 	// raw_string => single quotes: literal, strip quotes
 	if (!strcmp(t, "raw_string"))
@@ -316,11 +296,12 @@ static char	*expand_node_to_text(TSNode n)
 	// string => double quotes: concatenate children, expansions allowed
 	if (!strcmp(t, "string"))
 	{
-		out = NULL;
 		sc = ts_node_child_count(n);
 		for (uint32_t i = 0; i < sc; i++)
 		{
 			c = ts_node_child(n, i);
+			const char *ct = ts_node_type(c);
+
 			if (!strcmp(ct, "string_content"))
 			{
 				s = ts_extract_node_text(input, c);
@@ -331,14 +312,20 @@ static char	*expand_node_to_text(TSNode n)
 			{
 				// $?, $VAR
 				inner = ts_node_child(c, 1);
-				val = NULL;
+	
+				char *val = NULL;
+
 				if (!ts_node_is_null(inner))
 				{
+					//if (!strcmp(it, "special_variable_name"))
+					const char *it = ts_node_type(inner);
 					if (!strcmp(it, "special_variable_name"))
+
 					{
-						nm = ts_extract_node_text(input, inner);
+						char *nm = ts_extract_node_text(input, inner);
 						if (!strcmp(nm, "?"))
 						{
+							char buf[16];
 							snprintf(buf, sizeof buf, "%d", last_exit_status);
 							val = strdup(buf);
 						}
@@ -346,7 +333,8 @@ static char	*expand_node_to_text(TSNode n)
 					}
 					else if (!strcmp(it, "variable_name"))
 					{
-						nm = ts_extract_node_text(input, inner);
+
+						char *nm = ts_extract_node_text(input, inner);
 						if (nm)
 						{
 							val = strdup(var_get(nm));
@@ -363,12 +351,13 @@ static char	*expand_node_to_text(TSNode n)
 			{
 				// Handle ${VAR} inside double quotes
 				var_node = ts_node_named_child(c, 0);
-				val = NULL;
+				char *val = NULL;
 				if (!ts_node_is_null(var_node))
 				{
+					const char *vt = ts_node_type(var_node);
 					if (!strcmp(vt, "variable_name"))
 					{
-						nm = ts_extract_node_text(input, var_node);
+						char *nm = ts_extract_node_text(input, var_node);
 						if (nm)
 						{
 							val = strdup(var_get(nm));
@@ -398,12 +387,13 @@ static char	*expand_node_to_text(TSNode n)
 		inner = ts_node_child(n, 1);
 		if (!ts_node_is_null(inner))
 		{
+			const char *it = ts_node_type(inner);
 			if (!strcmp(it, "special_variable_name"))
 			{
-				nm = ts_extract_node_text(input, inner);
-				s = NULL;
+				char *nm = ts_extract_node_text(input, inner);
 				if (!strcmp(nm, "?"))
 				{
+					char buf[16];
 					snprintf(buf, sizeof buf, "%d", last_exit_status);
 					s = strdup(buf);
 				}
@@ -412,7 +402,7 @@ static char	*expand_node_to_text(TSNode n)
 			}
 			else if (!strcmp(it, "variable_name"))
 			{
-				nm = ts_extract_node_text(input, inner);
+				char *nm = ts_extract_node_text(input, inner);
 				s = strdup(var_get(nm));
 				free(nm);
 				return s;
@@ -425,15 +415,14 @@ static char	*expand_node_to_text(TSNode n)
 	{
 		var_node = ts_node_named_child(n, 0);
 		if (!ts_node_is_null(var_node))
-		{
+		{	
+			const char *vt = ts_node_type(var_node);
 			if (!strcmp(vt, "variable_name"))
 			{
-				nm = ts_extract_node_text(input, var_node);
-				if (nm)
-				{
-					free(nm);
-					return strdup(val);
-				}
+				char *nm = ts_extract_node_text(input, var_node);
+				char *val = nm ? strdup(var_get(nm)) : strdup("");
+				free(nm);
+				return val;
 			}
 		}
 		return strdup("");
@@ -453,7 +442,7 @@ static char	*expand_node_to_text(TSNode n)
 		}
 		else
 		{
-			out = NULL;
+			//out = NULL;
 			for (uint32_t i = 0; i < sc; i++)
 			{
 				c = ts_node_child(n, i);
@@ -783,14 +772,14 @@ static void	execute_command(TSNode command_node)
 	}
 	free(argv);
 }
-static void				execute_pipeline(TSNode pipeline,
+static void execute_pipeline(TSNode pipeline,
 							const struct redir_spec *opt_r);
-static char				**build_argv_from_command(TSNode command_node,
+static char **build_argv_from_command(TSNode command_node,
 							int *argc_out);
-static void				collect_redirs(TSNode redirected_stmt,
+static void collect_redirs(TSNode redirected_stmt,
 							struct redir_spec *r);
 
-static int				spawn_stage(const char *cmd0, char *const argv[],
+static int spawn_stage(const char *cmd0, char *const argv[],
 							int rd_fd, int wr_fd, bool pipe_ampersand,
 							const struct redir_spec *r, pid_t pgid_in,
 							pid_t *out_pid, int pipes[][2], int npipes);
@@ -803,17 +792,31 @@ static char	**build_argv_from_command(TSNode command_node, int *argc_out)
 	uint32_t	start_index;
 	uint32_t	n;
 	TSNode		child;
-		const char *t = ts_node_type(child);
+	
+	
+//	const char *t = ts_node_type(child);
+	
+
 	char		*arg;
 
 	cap = 8, idx = 0;
 	argv = calloc(cap, sizeof *argv);
 	// name
+
 	name_node = ts_node_child_by_field_id(command_node, nameId);
-	start_index = 0;
-	if (ts_node_is_null(name_node))
+	if (ts_node_is_null(name_node)){
 		name_node = ts_node_named_child(command_node, 0);
-	start_index = 1;
+		start_index = 1;
+	} else{
+		start_index = 1;
+	}
+
+
+
+
+
+
+
 	if (!ts_node_is_null(name_node))
 	{
 		if (idx + 2 > cap)
@@ -827,8 +830,11 @@ static char	**build_argv_from_command(TSNode command_node, int *argc_out)
 	for (uint32_t i = start_index; i < n; i++)
 	{
 		child = ts_node_named_child(command_node, i);
+		const char *t = ts_node_type(child);
+
 		if (!strcmp(t, "file_redirect"))
 			continue ;
+		
 		if (!strcmp(t, "command_name"))
 			continue ;
 		arg = expand_node_to_text(child);
@@ -847,7 +853,6 @@ static char	**build_argv_from_command(TSNode command_node, int *argc_out)
 
 static void	collect_redirs(TSNode redirected_stmt, struct redir_spec *r)
 // TODO(next): detect numeric-fd redirects (e.g., 2>, 2>>),
-	not just generic file_redirect.
 // TODO(next): support |& (stderr+stdout to pipe) via a flag propagated into spawn_stage.
 
 {
@@ -956,8 +961,7 @@ static int	spawn_stage(const char *cmd0, char *const argv[], int rd_fd,
 		int wr_fd, bool pipe_ampersand, const struct redir_spec *r,
 		pid_t pgid_in, pid_t *out_pid, int pipes[][2], int npipes)
 
-// TODO(next): if r specifies fd==2 redirection,
-	dup2 to STDERR_FILENO (2) accordingly.
+// TODO(next): if r specifies fd==2 redirection,dup2 to STDERR_FILENO (2) accordingly.
 // TODO(next): support append/trunc modes for stderr similarly to stdout.
 
 {
@@ -1072,14 +1076,17 @@ static void	execute_pipeline(TSNode pipeline, const struct redir_spec *opt_r)
 	int					rd_fd;
 	int					wr_fd;
 	struct redir_spec	rtmp;
-		const struct redir_spec *r = NULL;
+	
+	const struct redir_spec *r = NULL;
 		pid_t pid;
 
 	m = ts_node_named_child_count(pipeline);
 	if (m == 0)
 		return ;
 	// Check if the first command has own input redirect
-	first_cmd_redir = {0};
+	//first_cmd_redir = {0};
+	memset(&first_cmd_redir, 0, sizeof first_cmd_redir);
+
 	first_cmd = ts_node_named_child(pipeline, 0);
 	// Look for redirects directly on the first command
 	fc_count = ts_node_child_count(first_cmd);
@@ -1142,7 +1149,8 @@ static void	execute_pipeline(TSNode pipeline, const struct redir_spec *opt_r)
 		}
 		rd_fd = (i == 0) ? -1 : pipes[i - 1][0];
 		wr_fd = (i == m - 1) ? -1 : pipes[i][1];
-		rtmp = {0};
+		//rtmp = {0};
+		memset(&rtmp, 0, sizeof rtmp);
 		if (i == 0 && first_cmd_redir.in_path)
 		{
 			rtmp.in_path = first_cmd_redir.in_path;
@@ -1276,221 +1284,181 @@ static void	handle_child_status(pid_t pid, int status)
  * A program's named children are various types of statements which
  * you can start implementing here.
  */
-static void	run_program(TSNode program)
+static void run_program(TSNode program)
 {
-	uint32_t	n;
-	TSNode		node;
-		const char *type = ts_node_type(node);
-	TSNode		name;
-	char		*k = NULL, *v;
-	TSNode		val;
-	TSNode		body;
-			struct redir_spec r;
-				const char *bt = ts_node_type(body);
-	int			argc;
-	char		**argv;
-	struct job	*job;
-						pid_t pid;
-	uint32_t	nc;
-	TSNode		child;
-				const char *child_type = ts_node_type(child);
-	TSNode		body;
-					struct redir_spec r;
-						const char *bt = ts_node_type(body);
-	TSNode		op_node;
-	char		*op;
-	TSNode		condition;
-				const char *cond_type = ts_node_type(condition);
-	TSNode		then_body;
-						const char *body_type = ts_node_type(then_body);
-	uint32_t	child_count;
-	TSNode		else_clause;
+    uint32_t n = ts_node_named_child_count(program);
 
-	n = ts_node_named_child_count(program);
-	for (uint32_t i = 0; i < n; i++)
-	{
-		node = ts_node_named_child(program, i);
-		if (strcmp(type, "variable_assignment") == 0)
-		{
-			name = ts_node_child_by_field_id(node, nameId);
-			if (ts_node_is_null(name))
-				name = ts_node_child_by_field_id(node, variableId);
-			k = NULL, v = NULL;
-			if (!ts_node_is_null(name))
-				k = ts_extract_node_text(input, name);
-			val = ts_node_child_by_field_id(node, valueId);
-			if (!ts_node_is_null(val))
-				v = expand_node_to_text(val);
-			else
-				v = strdup("");
-			if (k)
-				var_set(k, v);
-			free(k);
-			free(v);
-			continue ;
-		}
-		if (strcmp(type, "comment") == 0)
-		{
-			continue ;
-		}
-		if (strcmp(type, "redirected_statement") == 0)
-		{
-			body = ts_node_child_by_field_id(node, bodyId);
-			collect_redirs(node, &r);
-			if (!ts_node_is_null(body))
-			{
-				DBG("[minibash] redirected body: %s\n", bt);
-				if (strcmp(bt, "command") == 0)
-				{
-					argc = 0;
-					argv = build_argv_from_command(body, &argc);
-					if (argv && argv[0])
-					{
-						job = allocate_job(true);
-						job->status = FOREGROUND;
-						job->num_processes_alive = 1;
-						job->nprocs = 1;
-						if (spawn_stage(argv[0], argv, -1, -1, false, &r, 0,
-								&pid, NULL, 0) == 0)
-						{
-							job->pgid = pid;
-							job->pids[0] = pid;
-							job->nprocs = 1;
-							wait_for_job(job);
-						}
-						delete_job(job, true);
-					}
-					if (argv)
-					{
-						for (int k = 0; k < argc; k++)
-							free(argv[k]);
-						free(argv);
-					}
-				}
-				else if (strcmp(bt, "pipeline") == 0)
-				{
-					execute_pipeline(body, &r);
-				}
-			}
-			continue ;
-		}
-		if (strcmp(type, "pipeline") == 0)
-		{
-			execute_pipeline(node, NULL);
-			continue ;
-		}
-		if (strcmp(type, "command") == 0)
-		{
-			execute_command(node);
-			continue ;
-		}
-		if (strcmp(type, "list") == 0)
-		{
-			nc = ts_node_child_count(node);
-			for (uint32_t j = 0; j < nc; j++)
-			{
-				child = ts_node_child(node, j);
-				if (!ts_node_is_named(child))
-					continue ;
-				if (strcmp(child_type, "command") == 0)
-				{
-					execute_command(child);
-				}
-				else if (strcmp(child_type, "pipeline") == 0)
-				{
-					execute_pipeline(child, NULL);
-				}
-				else if (strcmp(child_type, "redirected_statement") == 0)
-				{
-					body = ts_node_child_by_field_id(child, bodyId);
-					collect_redirs(child, &r);
-					if (!ts_node_is_null(body))
-					{
-						if (strcmp(bt, "command") == 0)
-						{
-						}
-						else if (strcmp(bt, "pipeline") == 0)
-						{
-							execute_pipeline(body, &r);
-						}
-					}
-				}
-				if (j + 1 < nc)
-				{
-					op_node = ts_node_child(node, j + 1);
-					if (!ts_node_is_named(op_node))
-					{
-						op = ts_extract_node_text(input, op_node);
-						if (op && strcmp(op, "&&") == 0)
-						{
-							if (last_exit_status != 0)
-							{
-								j += 2;
-								if (j < nc)
-									j--;
-							}
-						}
-						else if (op && strcmp(op, "||") == 0)
-						{
-							if (last_exit_status == 0)
-							{
-								j += 2;
-								if (j < nc)
-									j--;
-							}
-						}
-						free(op);
-					}
-				}
-			}
-			continue ;
-		}
-		if (strcmp(type, "if_statement") == 0)
-		{
-			// TODO: 092 and 095 if statement with elif
-			condition = ts_node_named_child(node, 0);
-			if (!ts_node_is_null(condition))
-			{
-				if (strcmp(cond_type, "command") == 0)
-				{
-					execute_command(condition);
-				}
-				else if (strcmp(cond_type, "pipeline") == 0)
-				{
-					execute_pipeline(condition, NULL);
-				}
-				if (last_exit_status == 0)
-				{
-					then_body = ts_node_named_child(node, 1);
-					if (!ts_node_is_null(then_body))
-					{
-						if (strcmp(body_type, "command") == 0)
-						{
-							execute_command(then_body);
-						}
-						else if (strcmp(body_type, "pipeline") == 0)
-						{
-							execute_pipeline(then_body, NULL);
-						}
-					}
-				}
-				else
-				{
-					child_count = ts_node_named_child_count(node);
-					if (child_count > 2)
-					{
-						else_clause = ts_node_named_child(node, 2);
-						if (strcmp(ts_node_type(else_clause),
-								"else_clause") == 0)
-						{
-							run_program(else_clause);
-						}
-					}
-				}
-			}
-			continue ;
-		}
-	}
+    for (uint32_t i = 0; i < n; i++) {
+        TSNode node = ts_node_named_child(program, i);
+        const char *type = ts_node_type(node);
+
+        /* VAR=VAL */
+        if (strcmp(type, "variable_assignment") == 0) {
+            TSNode name = ts_node_child_by_field_id(node, nameId);
+            if (ts_node_is_null(name))
+                name = ts_node_child_by_field_id(node, variableId);
+
+            char *k = NULL, *v = NULL;
+            if (!ts_node_is_null(name))
+                k = ts_extract_node_text(input, name);
+
+            TSNode val = ts_node_child_by_field_id(node, valueId);
+            if (!ts_node_is_null(val)) v = expand_node_to_text(val);
+            else v = strdup("");
+
+            if (k) var_set(k, v);
+            free(k);
+            free(v);
+            continue;
+        }
+
+        /* comments */
+        if (strcmp(type, "comment") == 0) {
+            continue;
+        }
+
+        /* redirs around command/pipeline */
+        if (strcmp(type, "redirected_statement") == 0) {
+            TSNode body = ts_node_child_by_field_id(node, bodyId);
+            struct redir_spec r;
+            collect_redirs(node, &r);
+
+            if (!ts_node_is_null(body)) {
+                const char *bt = ts_node_type(body);
+
+                if (strcmp(bt, "command") == 0) {
+                    int argc = 0;
+                    char **argv = build_argv_from_command(body, &argc);
+                    if (argv && argv[0]) {
+                        struct job *job = allocate_job(true);
+                        job->status = FOREGROUND;
+                        job->num_processes_alive = 1;
+                        job->nprocs = 1;
+
+                        pid_t pid;
+                        if (spawn_stage(argv[0], argv, -1, -1, false, &r, 0,
+                                        &pid, NULL, 0) == 0) {
+                            job->pgid = pid;
+                            job->pids[0] = pid;
+                            wait_for_job(job);
+                        }
+                        delete_job(job, true);
+                    }
+                    if (argv) { for (int k = 0; k < argc; k++) free(argv[k]); free(argv); }
+                } else if (strcmp(bt, "pipeline") == 0) {
+                    execute_pipeline(body, &r);
+                }
+            }
+            continue;
+        }
+
+        /* bare pipeline */
+        if (strcmp(type, "pipeline") == 0) {
+            execute_pipeline(node, NULL);
+            continue;
+        }
+
+        /* bare command */
+        if (strcmp(type, "command") == 0) {
+            execute_command(node);
+            continue;
+        }
+
+        /* list with && and || */
+        if (strcmp(type, "list") == 0) {
+            uint32_t nc = ts_node_child_count(node);
+            for (uint32_t j = 0; j < nc; j++) {
+                TSNode child = ts_node_child(node, j);
+                if (!ts_node_is_named(child)) continue;
+
+                const char *child_type = ts_node_type(child);
+
+                if (strcmp(child_type, "command") == 0) {
+                    execute_command(child);
+                } else if (strcmp(child_type, "pipeline") == 0) {
+                    execute_pipeline(child, NULL);
+                } else if (strcmp(child_type, "redirected_statement") == 0) {
+                    TSNode body = ts_node_child_by_field_id(child, bodyId);
+                    struct redir_spec r2;
+                    collect_redirs(child, &r2);
+                    if (!ts_node_is_null(body)) {
+                        const char *bt = ts_node_type(body);
+                        if (strcmp(bt, "command") == 0) {
+                            int argc = 0; char **argv = build_argv_from_command(body, &argc);
+                            if (argv && argv[0]) {
+                                struct job *job = allocate_job(true);
+                                job->status = FOREGROUND;
+                                job->num_processes_alive = 1;
+                                job->nprocs = 1;
+                                pid_t pid;
+                                if (spawn_stage(argv[0], argv, -1, -1, false, &r2, 0,
+                                                &pid, NULL, 0) == 0) {
+                                    job->pgid = pid;
+                                    job->pids[0] = pid;
+                                    wait_for_job(job);
+                                }
+                                delete_job(job, true);
+                            }
+                            if (argv) { for (int k = 0; k < argc; k++) free(argv[k]); free(argv); }
+                        } else if (strcmp(bt, "pipeline") == 0) {
+                            execute_pipeline(body, &r2);
+                        }
+                    }
+                }
+
+                /* handle && and || */
+                if (j + 1 < nc) {
+                    TSNode op_node = ts_node_child(node, j + 1);
+                    if (!ts_node_is_named(op_node)) {
+                        char *op = ts_extract_node_text(input, op_node);
+                        if (op && strcmp(op, "&&") == 0) {
+                            if (last_exit_status != 0) { j += 2; if (j < nc) j--; }
+                        } else if (op && strcmp(op, "||") == 0) {
+                            if (last_exit_status == 0) { j += 2; if (j < nc) j--; }
+                        }
+                        free(op);
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* if / then [/ else] */
+        if (strcmp(type, "if_statement") == 0) {
+            TSNode condition = ts_node_named_child(node, 0);
+            if (!ts_node_is_null(condition)) {
+                const char *cond_type = ts_node_type(condition);
+                if (strcmp(cond_type, "command") == 0) {
+                    execute_command(condition);
+                } else if (strcmp(cond_type, "pipeline") == 0) {
+                    execute_pipeline(condition, NULL);
+                }
+
+                if (last_exit_status == 0) {
+                    TSNode then_body = ts_node_named_child(node, 1);
+                    if (!ts_node_is_null(then_body)) {
+                        const char *body_type = ts_node_type(then_body);
+                        if (strcmp(body_type, "command") == 0) {
+                            execute_command(then_body);
+                        } else if (strcmp(body_type, "pipeline") == 0) {
+                            execute_pipeline(then_body, NULL);
+                        } else if (strcmp(body_type, "list") == 0) {
+                            run_program(then_body);
+                        }
+                    }
+                } else {
+                    uint32_t child_count = ts_node_named_child_count(node);
+                    if (child_count > 2) {
+                        TSNode else_clause = ts_node_named_child(node, 2);
+                        if (strcmp(ts_node_type(else_clause), "else_clause") == 0) {
+                            run_program(else_clause);
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+    }
 }
 
 /*
@@ -1500,15 +1468,20 @@ static void	run_program(TSNode program)
 static char	*read_script_from_fd(int readfd)
 {
 	struct stat	st;
+
 	char		*userinput;
+
 	ssize_t		off;
+
 	ssize_t		n;
+
 	size_t		cap;
 	size_t		len;
 	char		*buf;
 	size_t		ncap;
+
 	char		*nb;
-	ssize_t		n;
+
 
 	if (fstat(readfd, &st) != 0)
 	{
@@ -1614,8 +1587,8 @@ int	main(int ac, char *av[])
 		}
 	}
 	parser = ts_parser_new();
-#define DEFINE_FIELD_ID(name) name##Id = ts_language_field_id_for_name(bash,
-		#name, strlen(#name))
+#define DEFINE_FIELD_ID(name) \
+	name##Id = ts_language_field_id_for_name(bash, #name, strlen(#name))
 	DEFINE_FIELD_ID(body);
 	DEFINE_FIELD_ID(condition);
 	DEFINE_FIELD_ID(name);
