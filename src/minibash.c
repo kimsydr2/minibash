@@ -84,16 +84,16 @@ static unsigned long khash(const void *key)
 }
 static char *str_cat3(char *a, const char *b)
 {
-	size_t	la = strlen(a), lb;
-
-	if (!a)
-		return (strdup(b ? b : ""));
-	la = strlen(a), lb = b ? strlen(b) : 0;
-	a = realloc(a, la + lb + 1);
-	if (b)
-		memcpy(a + la, b, lb);
-	a[la + lb] = 0;
-	return (a);
+    if (!a && !b) return strdup("");
+    if (!a) return strdup(b ? b : "");
+    if (!b) return a;  // Just return a if b is NULL
+    
+    size_t la = strlen(a);
+    size_t lb = strlen(b);
+    a = realloc(a, la + lb + 1);
+    memcpy(a + la, b, lb);
+    a[la + lb] = 0;
+    return a;
 }
 /* expansions & vars */
 static char *expand_node_to_text(TSNode n);
@@ -278,6 +278,7 @@ static char	*expand_node_to_text(TSNode n)
 {
 	const char	*t = ts_node_type(n);
 
+
 	char *withq, *s = NULL, *out = NULL, *part = NULL;
 
 	size_t len;
@@ -294,93 +295,98 @@ static char	*expand_node_to_text(TSNode n)
 		return (s);
 	}
 	// string => double quotes: concatenate children, expansions allowed
-	if (!strcmp(t, "string"))
-	{
-		sc = ts_node_child_count(n);
-		for (uint32_t i = 0; i < sc; i++)
-		{
-			c = ts_node_child(n, i);
-			const char *ct = ts_node_type(c);
+	if (!strcmp(t, "string")) {
+    char *out = NULL;
+    uint32_t sc = ts_node_child_count(n);
 
-			if (!strcmp(ct, "string_content"))
-			{
-				s = ts_extract_node_text(input, c);
-				out = str_cat3(out, s);
-				free(s);
-			}
-			else if (!strcmp(ct, "simple_expansion"))
-			{
-				// $?, $VAR
-				inner = ts_node_child(c, 1);
-	
-				char *val = NULL;
+    
+    bool has_content = false;
+    for (uint32_t i = 0; i < sc; i++) {
+        TSNode c = ts_node_child(n, i);
+        const char *ct = ts_node_type(c);
+        if (!strcmp(ct, "string_content")) {
+            has_content = true;
+            break;
+        }
+    }
+    if (!has_content && sc >= 2) {
+        char *full_text = ts_extract_node_text(input, n);
+        if (full_text) {
+            size_t len = strlen(full_text);
+            if (len >= 2) {
+                out = strndup(full_text + 1, len - 2);
+            } else {
+                out = strdup("");
+            }
+            free(full_text);
+        }
+        return out ? out : strdup("");
+    }
+    
+    for (uint32_t i = 0; i < sc; i++) {
+        TSNode c = ts_node_child(n, i);
+        const char *ct = ts_node_type(c);
 
-				if (!ts_node_is_null(inner))
-				{
-					//if (!strcmp(it, "special_variable_name"))
-					const char *it = ts_node_type(inner);
-					if (!strcmp(it, "special_variable_name"))
+        
+        if (!strcmp(ct, "string_content")) {
+            char *s = ts_extract_node_text(input, c);
+            if (s) {
+                out = str_cat3(out, s);
+                free(s);
+            }
+        } else if (!strcmp(ct, "simple_expansion")) {
+            // Handle $VAR inside double quotes
+            TSNode inner = ts_node_child(c, 1);
+            char *val = NULL;
+            if (!ts_node_is_null(inner)) {
+                const char *it = ts_node_type(inner);
+                if (!strcmp(it, "special_variable_name")) {
+                    char *nm = ts_extract_node_text(input, inner);
+                    if (nm && !strcmp(nm, "?")) {
+                        char buf[16];
+                        snprintf(buf, sizeof buf, "%d", last_exit_status);
+                        val = strdup(buf);
+                    }
+                    free(nm);
+                } else if (!strcmp(it, "variable_name")) {
+                    char *nm = ts_extract_node_text(input, inner);
+                    if (nm) {
+                        val = strdup(var_get(nm));
+                        free(nm);
+                    }
+                }
+            }
+            if (!val) val = strdup("");
+            out = str_cat3(out, val);
+            free(val);
+        } else if (!strcmp(ct, "expansion")) {
+            // Handle ${VAR} inside double quotes
+            TSNode var_node = ts_node_named_child(c, 0);
+            char *val = NULL;
+            if (!ts_node_is_null(var_node)) {
+                const char *vt = ts_node_type(var_node);
+                if (!strcmp(vt, "variable_name")) {
+                    char *nm = ts_extract_node_text(input, var_node);
+                    if (nm) {
+                        val = strdup(var_get(nm));
+                        free(nm);
+                    }
+                }
+            }
+            if (!val) val = strdup("");
+            out = str_cat3(out, val);
+            free(val);
+        } else if (!strcmp(ct, "command_substitution")) {
+            char *s = command_subst_to_text(c);
+            out = str_cat3(out, s);
+            free(s);
+        }
+    }
+    
+    if (!out) out = strdup("");
 
-					{
-						char *nm = ts_extract_node_text(input, inner);
-						if (!strcmp(nm, "?"))
-						{
-							char buf[16];
-							snprintf(buf, sizeof buf, "%d", last_exit_status);
-							val = strdup(buf);
-						}
-						free(nm);
-					}
-					else if (!strcmp(it, "variable_name"))
-					{
-
-						char *nm = ts_extract_node_text(input, inner);
-						if (nm)
-						{
-							val = strdup(var_get(nm));
-							free(nm);
-						}
-					}
-				}
-				if (!val)
-					val = strdup(""); // unset -> empty
-				out = str_cat3(out, val);
-				free(val);
-			}
-			else if (!strcmp(ct, "expansion"))
-			{
-				// Handle ${VAR} inside double quotes
-				var_node = ts_node_named_child(c, 0);
-				char *val = NULL;
-				if (!ts_node_is_null(var_node))
-				{
-					const char *vt = ts_node_type(var_node);
-					if (!strcmp(vt, "variable_name"))
-					{
-						char *nm = ts_extract_node_text(input, var_node);
-						if (nm)
-						{
-							val = strdup(var_get(nm));
-							free(nm);
-						}
-					}
-				}
-				if (!val)
-					val = strdup("");
-				out = str_cat3(out, val);
-				free(val);
-			}
-			else if (!strcmp(ct, "command_substitution"))
-			{
-				s = command_subst_to_text(c);
-				out = str_cat3(out, s);
-				free(s);
-			}
-		}
-		if (!out)
-			out = strdup(""); // empty ""
-		return (out);
-	}
+    return out;
+}
 	// simple_expansion in unquoted word
 	if (!strcmp(t, "simple_expansion"))
 	{
@@ -455,7 +461,8 @@ static char	*expand_node_to_text(TSNode n)
 			return out;
 		}
 	}
-	return ts_extract_node_text(input, n);
+char *result = ts_extract_node_text(input, n);
+return result ? result : strdup("");  
 }
 
 /*static void hash_free(void *vp) {
