@@ -1203,21 +1203,21 @@ static void	execute_pipeline(TSNode pipeline, const struct redir_spec *opt_r)
 		job->pids[i] = pid;
 		
 		// --- Parent closes FDs ---
-		// The parent must close the pipe ends used for communication with this child.
-		if (rd_fd >= 0)
-			close(rd_fd);
-		if (wr_fd >= 0)
-			close(wr_fd);
+		// REMOVED per-stage close to prevent hang.
+		// These FDs will be closed below after the loop.
+
 		
 		for (int k = 0; k < argc; k++) free(argv[k]);
 		free(argv);
 	}
 	
-	// FIX: The original, known-working solution for pipelines often involves 
-	// closing all pipe FDs *after* the loop, assuming the per-stage closes 
-	// might fail or be incomplete. Let's stick with the per-stage close in 
-	// the loop above and rely on it working, as it's cleaner.
-	
+	// --- FIX: Close ALL pipe FDs in the parent after ALL children are spawned. ---
+	// This ensures every process gets the EOF/error signal once the shell has no need for the pipe.
+	for (int p = 0; p < npipes; p++) {
+		close(pipes[p][0]);
+		close(pipes[p][1]);
+	}
+
 	// --- 4. Wait for Job ---
 	wait_for_job(job);
 	delete_job(job, true);
