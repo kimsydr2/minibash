@@ -148,7 +148,20 @@ static int kv_cmp(const void *a, const void *b)
     if (!p || !p->k || !key) return -1;
     return strcmp(p->k, key);
 }
+static void run_body(TSNode body);
 
+// Execute a body node regardless of how Tree-sitter wrapped it
+static void run_body(TSNode body) {
+    if (ts_node_is_null(body)) return;
+    const char *bt = ts_node_type(body);
+    if (!bt) return;
+
+    if      (strcmp(bt, "command") == 0)      execute_command(body);
+    else if (strcmp(bt, "pipeline") == 0)     execute_pipeline(body, NULL);
+    else if (strcmp(bt, "list") == 0)         run_program(body);
+    else if (strcmp(bt, "do_group") == 0)     run_program(body);   // seen in loops/ifs
+    else                                       run_program(body);   // safe fallback
+}
 static void var_set(const char *k, const char *v)
 {
 	tommy_node	*n;
@@ -341,11 +354,16 @@ static char *expand_node_to_text(TSNode n)
                     const char *it = ts_node_type(inner);
                     if (it && strcmp(it, "special_variable_name") == 0) {
                         char *nm = ts_extract_node_text(input, inner);
+
                         if (nm && strcmp(nm, "?") == 0) {
                             char buf[16];
                             snprintf(buf, sizeof buf, "%d", last_exit_status);
                             val = strdup(buf);
                         }
+						if (nm && strcmp(nm, "$") == 0) {
+    						char buf[32]; snprintf(buf, sizeof buf, "%d", (int)getpid());
+    						free(nm); return strdup(buf);
+						}
                         free(nm);
                     } else if (it && strcmp(it, "variable_name") == 0) {
                         char *nm = ts_extract_node_text(input, inner);
@@ -399,6 +417,10 @@ static char *expand_node_to_text(TSNode n)
                     free(nm);
                     return strdup(buf);
                 }
+				if (nm && strcmp(nm, "$") == 0) {
+    				char buf[32]; snprintf(buf, sizeof buf, "%d", (int)getpid());
+    				free(nm); return strdup(buf);
+				}
                 free(nm);
                 return strdup("");
             } else if (it && strcmp(it, "variable_name") == 0) {
@@ -1077,18 +1099,26 @@ static void	execute_pipeline(TSNode pipeline, const struct redir_spec *opt_r)
 			break ;
 		}
 	}
-	bool pipe_ampersand = false; // TODO
-	rc = ts_node_child_count(pipeline);
-	for (uint32_t i = 0; i < rc; i++)
-	{
-		c = ts_node_child(pipeline, i);
-		if (ts_node_is_named(c))
-			continue ;
-		tok = ts_extract_node_text(input, c);
-		if (tok && strcmp(tok, "|&") == 0)
-			pipe_ampersand = true;
-		free(tok);
-	}
+		bool pipe_ampersand = false;
+		bool last_was_pipe_token = false;
+
+		uint32_t tcount = ts_node_child_count(pipeline);
+		for (uint32_t i = 0; i < tcount; i++) {
+			TSNode tok = ts_node_child(pipeline, i);
+			if (ts_node_is_named(tok)) continue;
+			char *txt = ts_extract_node_text(input, tok);
+			if (!txt) continue;
+			if (strcmp(txt, "|") == 0) {
+				last_was_pipe_token = true;
+			} else if (last_was_pipe_token && strcmp(txt, "&") == 0) {
+				pipe_ampersand = true;
+			} else if (strcmp(txt, "|&") == 0) {
+				pipe_ampersand = true;
+			} else {
+				last_was_pipe_token = false;
+			}
+			free(txt);
+		}
 	npipes = (m > 1) ? (int)(m - 1) : 0;
 	for (int i = 0; i < npipes; i++)
 	{
@@ -1404,37 +1434,43 @@ static void run_program(TSNode program)
 		/* for ... do ... done */
 if (strcmp(type, "for_statement") == 0) {
     TSNode varnode = ts_node_child_by_field_id(node, nameId);
-    if (ts_node_is_null(varnode)) continue;
+    if (ts_node_is_null(varnode)) { continue; }
     char *varname = ts_extract_node_text(input, varnode);
     if (!varname) varname = strdup("");
 
+    TSNode word_list = {0};
+    TSNode body = {0};
+
     uint32_t nc = ts_node_named_child_count(node);
-    TSNode body = ts_node_named_child(node, nc - 1);
+    for (uint32_t k = 0; k < nc; k++) {
+        TSNode nn = ts_node_named_child(node, k);
+        const char *nt = ts_node_type(nn);
+        if (!nt) continue;
+        if (strcmp(nt, "word_list") == 0) word_list = nn;
+        else if (strcmp(nt, "list") == 0 || strcmp(nt, "do_group") == 0) body = nn;
+    }
 
-    for (uint32_t i2 = 1; i2 + 1 < nc; i2++) {
-        TSNode w = ts_node_named_child(node, i2);
-        const char *wt = ts_node_type(w);
-        if (!strcmp(wt, "word") || !strcmp(wt, "string") || !strcmp(wt, "raw_string") ||
-            !strcmp(wt, "expansion") || !strcmp(wt, "simple_expansion") ||
-            !strcmp(wt, "command_substitution")) {
-
+    // Iterate items in word_list
+    if (!ts_node_is_null(word_list)) {
+        uint32_t wn = ts_node_named_child_count(word_list);
+        for (uint32_t i2 = 0; i2 < wn; i2++) {
+            TSNode w = ts_node_named_child(word_list, i2);
             char *val = expand_node_to_text(w);
             var_set(varname, val ? val : "");
             free(val);
 
             loop_ctl = LOOP_NONE;
-            const char *bt = ts_node_type(body);
-            if (!strcmp(bt, "command"))      execute_command(body);
-            else if (!strcmp(bt, "pipeline")) execute_pipeline(body, NULL);
-            else if (!strcmp(bt, "list"))     run_program(body);
+            run_program(body);   // body is usually a list
 
             if (loop_ctl == LOOP_BREAK)    { loop_ctl = LOOP_NONE; break; }
             if (loop_ctl == LOOP_CONTINUE) { loop_ctl = LOOP_NONE; continue; }
         }
     }
+
     free(varname);
     continue;
 }
+
 
 /* while ... do ... done */
 if (strcmp(type, "while_statement") == 0) {
@@ -1471,10 +1507,8 @@ if (strcmp(type, "if_statement") == 0) {
     TSNode cond = ts_node_named_child(node, 0);
     if (eval_condition_node(cond) == 0) {
         TSNode then_body = ts_node_named_child(node, 1);
-        const char *bt = ts_node_type(then_body);
-        if (!strcmp(bt, "command"))      execute_command(then_body);
-        else if (!strcmp(bt, "pipeline")) execute_pipeline(then_body, NULL);
-        else if (!strcmp(bt, "list"))     run_program(then_body);
+        run_body(then_body);
+
         continue;
     }
 
@@ -1490,8 +1524,7 @@ if (strcmp(type, "if_statement") == 0) {
             TSNode ec_body = ts_node_named_child(c, 1);
             const char *bt = ts_node_type(ec_body);
             if (!strcmp(bt, "command"))      execute_command(ec_body);
-            else if (!strcmp(bt, "pipeline")) execute_pipeline(ec_body, NULL);
-            else if (!strcmp(bt, "list"))     run_program(ec_body);
+			run_body(ec_body);
             taken = true;
             break;
         }
@@ -1500,14 +1533,9 @@ if (strcmp(type, "if_statement") == 0) {
 
     // ELSE
     TSNode last = ts_node_named_child(node, nc - 1);
-    if (!ts_node_is_null(last) && !strcmp(ts_node_type(last), "else_clause")) {
+    if (!ts_node_is_null(last) && strcmp(ts_node_type(last), "else_clause") == 0) {
         TSNode ebody = ts_node_named_child(last, 0);
-        if (!ts_node_is_null(ebody)) {
-            const char *bt = ts_node_type(ebody);
-            if (!strcmp(bt, "command"))      execute_command(ebody);
-            else if (!strcmp(bt, "pipeline")) execute_pipeline(ebody, NULL);
-            else if (!strcmp(bt, "list"))     run_program(ebody);
-        }
+        run_body(ebody);
     }
     continue;
 }
