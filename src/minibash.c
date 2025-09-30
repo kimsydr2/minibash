@@ -354,7 +354,11 @@ static char *expand_node_to_text(TSNode n)
                     const char *it = ts_node_type(inner);
                     if (it && strcmp(it, "special_variable_name") == 0) {
                         char *nm = ts_extract_node_text(input, inner);
-
+						if (nm && (!strcmp(nm, "$") || !strcmp(nm, "pid"))) {
+        					char buf[32]; snprintf(buf, sizeof buf, "%d", (int)getpid());
+        					free(nm);
+        					return strdup(buf);
+						} 
                         if (nm && strcmp(nm, "?") == 0) {
                             char buf[16];
                             snprintf(buf, sizeof buf, "%d", last_exit_status);
@@ -599,6 +603,9 @@ struct					redir_spec
 	bool append_out;      // >>
 	const char *err_path; // >& file
 	bool append_err;      // (optional) >>& if you support it later
+
+    bool err_to_out;   // 2>&1
+    bool out_to_err;
 };
 
 /*
@@ -934,8 +941,15 @@ static void collect_redirs(TSNode redirected_stmt, struct redir_spec *r)
             } else if (p[0] == '>') {
                 if (p[1] == '>') is_append = true;
             } else if (strcmp(op, ">&") == 0) {
-                stderr_symbol = true;
-            }
+                // Accept forms "1" or "&1" etc.
+				if (!strcmp(path, "1") || !strcmp(path, "&1")) {
+					r->err_to_out = true;       // 2>&1
+					free(path); path = NULL;
+				} else if (!strcmp(path, "2") || !strcmp(path, "&2")) {
+					r->out_to_err = true;       // 1>&2
+					free(path); path = NULL;
+				}
+			}
 
             if (is_input || (target_fd == 0 && strchr(op, '<'))) {
                 if (r->in_path) free((char *)r->in_path);
@@ -983,6 +997,11 @@ static int	spawn_stage(const char *cmd0, char *const argv[], int rd_fd,
 	/* 2) Apply file redirections (dup2 onto 0/1/2 as needed) */
 	if (r)
 	{
+		if (r->err_to_out)
+        	posix_spawn_file_actions_adddup2(&fa, STDOUT_FILENO, STDERR_FILENO);
+		if (r->out_to_err)
+			posix_spawn_file_actions_adddup2(&fa, STDERR_FILENO, STDOUT_FILENO);
+		
 		if (r->in_path)
 		{
 			posix_spawn_file_actions_addopen(&fa, 100, r->in_path, O_RDONLY, 0);
@@ -1296,6 +1315,9 @@ static void run_program(TSNode program)
     uint32_t n = ts_node_named_child_count(program);
 
     for (uint32_t i = 0; i < n; i++) {
+		
+		if (loop_ctl != LOOP_NONE) return;
+
         TSNode node = ts_node_named_child(program, i);
         const char *type = ts_node_type(node);
 
@@ -1373,8 +1395,13 @@ static void run_program(TSNode program)
 
         /* list with && and || */
         if (strcmp(type, "list") == 0) {
+
             uint32_t nc = ts_node_child_count(node);
+
             for (uint32_t j = 0; j < nc; j++) {
+
+				if (loop_ctl != LOOP_NONE) break;
+
                 TSNode child = ts_node_child(node, j);
                 if (!ts_node_is_named(child)) continue;
 
@@ -1521,8 +1548,6 @@ if (strcmp(type, "if_statement") == 0) {
         TSNode ec_cond = ts_node_named_child(c, 0);
         if (eval_condition_node(ec_cond) == 0) {
             TSNode ec_body = ts_node_named_child(c, 1);
-            const char *bt = ts_node_type(ec_body);
-            if (!strcmp(bt, "command"))      execute_command(ec_body);
 			run_body(ec_body);
             taken = true;
             break;
