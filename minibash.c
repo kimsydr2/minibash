@@ -340,12 +340,18 @@ static char *expand_node_to_text(TSNode n)
                     const char *it = ts_node_type(inner);
                     if (it && strcmp(it, "special_variable_name") == 0) {
                         char *nm = ts_extract_node_text(input, inner);
-                        if (nm && strcmp(nm, "?") == 0) {
-                            char buf[16];
-                            snprintf(buf, sizeof buf, "%d", last_exit_status);
-                            val = strdup(buf);
+                        if (nm) {
+                            if (strcmp(nm, "?") == 0) {
+                                char buf[16];
+                                snprintf(buf, sizeof buf, "%d", last_exit_status);
+                                val = strdup(buf);
+                            } else if (strcmp(nm, "$") == 0) { // <-- FIX: Handle $$
+                                char buf[16];
+                                snprintf(buf, sizeof buf, "%d", getpid());
+                                val = strdup(buf);
+                            }
+                            free(nm);
                         }
-                        free(nm);
                     } else if (it && strcmp(it, "variable_name") == 0) {
                         char *nm = ts_extract_node_text(input, inner);
                         if (nm) { val = strdup(var_get(nm)); free(nm); }
@@ -392,13 +398,20 @@ static char *expand_node_to_text(TSNode n)
             const char *it = ts_node_type(inner);
             if (it && strcmp(it, "special_variable_name") == 0) {
                 char *nm = ts_extract_node_text(input, inner);
-                if (nm && strcmp(nm, "?") == 0) {
-                    char buf[16];
-                    snprintf(buf, sizeof buf, "%d", last_exit_status);
+                if (nm) {
+                    if (strcmp(nm, "?") == 0) {
+                        char buf[16];
+                        snprintf(buf, sizeof buf, "%d", last_exit_status);
+                        free(nm);
+                        return strdup(buf);
+                    } else if (strcmp(nm, "$") == 0) { // <-- FIX: Handle $$
+                        char buf[16];
+                        snprintf(buf, sizeof buf, "%d", getpid());
+                        free(nm);
+                        return strdup(buf);
+                    }
                     free(nm);
-                    return strdup(buf);
                 }
-                free(nm);
                 return strdup("");
             } else if (it && strcmp(it, "variable_name") == 0) {
                 char *nm = ts_extract_node_text(input, inner);
