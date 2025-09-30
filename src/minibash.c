@@ -920,6 +920,7 @@ static void collect_redirs(TSNode redirected_stmt, struct redir_spec *r)
             bool is_append = false;
             bool is_input  = false;
             bool stderr_symbol = false; // ">& file"
+			bool is_dup = false;
 
             const char *p = op;
             if (p[0] >= '0' && p[0] <= '9' && (p[1] == '>' || p[1] == '<')) {
@@ -932,8 +933,8 @@ static void collect_redirs(TSNode redirected_stmt, struct redir_spec *r)
             } else if (p[0] == '>') {
                 if (p[1] == '>') is_append = true;
 
-			bool is_dup = false;
             } else if (strstr(op, ">&") != NULL && path) {
+
     // if `2>&1` => target_fd likely 2, but we can just look at destination
 				if (!strcmp(path, "1") || !strcmp(path, "&1")) {
 					r->err_to_out = true;   // 2>&1 (stderr -> stdout)
