@@ -1064,9 +1064,6 @@ static void	execute_pipeline(TSNode pipeline, const struct redir_spec *opt_r)
 	TSNode				first_cmd;
 	uint32_t			fc_count;
 	TSNode				child;
-	uint32_t			rc;
-	TSNode				c;
-	char				*tok;
 	int					npipes;
 	int					pipes[64][2];
 	struct job			*job;
@@ -1105,7 +1102,9 @@ static void	execute_pipeline(TSNode pipeline, const struct redir_spec *opt_r)
 		uint32_t tcount = ts_node_child_count(pipeline);
 		for (uint32_t i = 0; i < tcount; i++) {
 			TSNode tok = ts_node_child(pipeline, i);
+			
 			if (ts_node_is_named(tok)) continue;
+			
 			char *txt = ts_extract_node_text(input, tok);
 			if (!txt) continue;
 			if (strcmp(txt, "|") == 0) {
