@@ -24,9 +24,26 @@ make
 source env.sh
 ```
 
-4. Test with
+5. Test the tree-sitter tool with with
 ```
 tree-sitter parse tests/001-comment.sh
 ```
 (The `tree-sitter` example must be separately installed; ours is in
 `~cs3214/bin`)
+
+6. Build the tests
+
+```
+(cd tests; make)
+```
+
+7. On rlogin, you may run the tests by invoking 
+
+```
+minibash_driver.py
+```
+
+On rlogin, this will pick up `minibash_driver.py` installed in our class directory.
+
+Use `../tests/minibash_driver.py` if you wish to run your copy of tests.
+

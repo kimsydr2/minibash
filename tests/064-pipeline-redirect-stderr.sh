@@ -4,6 +4,6 @@ writetostderr | rev
 # should redirect both stdout and stderr
 writetostderr |& rev
 # should redirect both stdout and stderr
-writetostderr >& out5
-cat out5
-rm out5
+writetostderr >& .out5
+cat .out5
+rm .out5

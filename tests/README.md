@@ -1,7 +1,8 @@
 
-This directory contains a first set of test for minibash.
+This directory contains the set of tests for minibash.
 
-All tests at this point should have deterministic output.
+Auxiliary programs such as `die` and `writetostderr` are 
+compiled in this directory, which is added to the PATH while
+the shell is being tested.
 
-Some tests assume that the programs `die` and `writetostderr`
-have been compiled and that this directory is added to the `PATH`
+The current directory is not affected.
