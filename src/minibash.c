@@ -353,23 +353,16 @@ static char *expand_node_to_text(TSNode n)
                 if (!ts_node_is_null(inner)) {
                     const char *it = ts_node_type(inner);
                     if (it && strcmp(it, "special_variable_name") == 0) {
-                        char *nm = ts_extract_node_text(input, inner);
-						if (nm && (!strcmp(nm, "$") || !strcmp(nm, "pid"))) {
-        					char buf[32]; snprintf(buf, sizeof buf, "%d", (int)getpid());
-        					free(nm);
-        					return strdup(buf);
-						} 
-                        if (nm && strcmp(nm, "?") == 0) {
-                            char buf[16];
-                            snprintf(buf, sizeof buf, "%d", last_exit_status);
-                            val = strdup(buf);
-                        }
-						if (nm && strcmp(nm, "$") == 0) {
-    						char buf[32]; snprintf(buf, sizeof buf, "%d", (int)getpid());
-    						free(nm); return strdup(buf);
-						}
-                        free(nm);
-                    } else if (it && strcmp(it, "variable_name") == 0) {
+						char *nm = ts_extract_node_text(input, inner);
+							if (nm && strcmp(nm, "?") == 0) {
+								char buf[16]; snprintf(buf, sizeof buf, "%d", last_exit_status);
+								val = strdup(buf);
+							} else if (nm && (strcmp(nm, "$") == 0 || strcmp(nm, "pid") == 0)) {
+								char buf[32]; snprintf(buf, sizeof buf, "%d", (int)getpid());
+								val = strdup(buf);
+							}
+							free(nm);
+} else if (it && strcmp(it, "variable_name") == 0) {
                         char *nm = ts_extract_node_text(input, inner);
                         if (nm) { val = strdup(var_get(nm)); free(nm); }
                     }
@@ -414,16 +407,14 @@ static char *expand_node_to_text(TSNode n)
         if (!ts_node_is_null(inner)) {
             const char *it = ts_node_type(inner);
             if (it && strcmp(it, "special_variable_name") == 0) {
-                char *nm = ts_extract_node_text(input, inner);
-                if (nm && strcmp(nm, "?") == 0) {
-                    char buf[16];
-                    snprintf(buf, sizeof buf, "%d", last_exit_status);
-                    free(nm);
-                    return strdup(buf);
-                }
-				if (nm && strcmp(nm, "$") == 0) {
-    				char buf[32]; snprintf(buf, sizeof buf, "%d", (int)getpid());
-    				free(nm); return strdup(buf);
+				char *nm = ts_extract_node_text(input, inner);
+				if (nm && (strcmp(nm, "?") == 0)) {
+					char buf[16]; snprintf(buf, sizeof buf, "%d", last_exit_status);
+					free(nm); return strdup(buf);
+				}
+				if (nm && (strcmp(nm, "$") == 0 || strcmp(nm, "pid") == 0)) {
+					char buf[32]; snprintf(buf, sizeof buf, "%d", (int)getpid());
+					free(nm); return strdup(buf);
 				}
                 free(nm);
                 return strdup("");
@@ -940,16 +931,22 @@ static void collect_redirs(TSNode redirected_stmt, struct redir_spec *r)
                 is_input = true;
             } else if (p[0] == '>') {
                 if (p[1] == '>') is_append = true;
-            } else if (strcmp(op, ">&") == 0) {
-                // Accept forms "1" or "&1" etc.
+
+			bool is_dup = false;
+            } else if (strstr(op, ">&") != NULL && path) {
+    // if `2>&1` => target_fd likely 2, but we can just look at destination
 				if (!strcmp(path, "1") || !strcmp(path, "&1")) {
-					r->err_to_out = true;       // 2>&1
-					free(path); path = NULL;
+					r->err_to_out = true;   // 2>&1 (stderr -> stdout)
+					is_dup = true;
 				} else if (!strcmp(path, "2") || !strcmp(path, "&2")) {
-					r->out_to_err = true;       // 1>&2
-					free(path); path = NULL;
+					r->out_to_err = true;   // 1>&2 (stdout -> stderr)
+					is_dup = true;
 				}
+				free(path);
+				path = NULL;
 			}
+
+			if (is_dup) { free(op); continue; } 
 
             if (is_input || (target_fd == 0 && strchr(op, '<'))) {
                 if (r->in_path) free((char *)r->in_path);
@@ -1464,29 +1461,41 @@ if (strcmp(type, "for_statement") == 0) {
     char *varname = ts_extract_node_text(input, varnode);
     if (!varname) varname = strdup("");
 
-    TSNode word_list = {0};
-    TSNode body = {0};
-
-    uint32_t nc = ts_node_named_child_count(node);
-    for (uint32_t k = 0; k < nc; k++) {
-        TSNode nn = ts_node_named_child(node, k);
-        const char *nt = ts_node_type(nn);
-        if (!nt) continue;
-        if (strcmp(nt, "word_list") == 0) word_list = nn;
-        else if (strcmp(nt, "list") == 0 || strcmp(nt, "do_group") == 0) body = nn;
+    // Body: prefer field 'body', fallback to last named child
+    TSNode body = ts_node_child_by_field_id(node, bodyId);
+    if (ts_node_is_null(body)) {
+        uint32_t nn = ts_node_named_child_count(node);
+        if (nn > 0) body = ts_node_named_child(node, nn - 1);
     }
+    if (ts_node_is_null(body)) { free(varname); continue; }
 
-    // Iterate items in word_list
-    if (!ts_node_is_null(word_list)) {
-        uint32_t wn = ts_node_named_child_count(word_list);
-        for (uint32_t i2 = 0; i2 < wn; i2++) {
-            TSNode w = ts_node_named_child(word_list, i2);
+    // Collect items: named children strictly between name and body
+    // (accept word/string/raw/expansion/command_substitution)
+    uint32_t nn = ts_node_named_child_count(node);
+    int name_idx = -1, body_idx = -1;
+    for (uint32_t i2 = 0; i2 < nn; i2++) {
+        TSNode ch = ts_node_named_child(node, i2);
+        if (ts_node_eq(ch, varnode)) name_idx = (int)i2;
+        if (ts_node_eq(ch, body))    body_idx = (int)i2;
+    }
+    if (name_idx >= 0 && body_idx > name_idx + 0) {
+        for (int i2 = name_idx + 1; i2 < body_idx; i2++) {
+            TSNode w = ts_node_named_child(node, (uint32_t)i2);
+            const char *wt = ts_node_type(w);
+            if (!wt) continue;
+            // Only iterate over token-like items (skip "in" lists that come as named nodes on some grammars)
+            if (strcmp(wt, "word") && strcmp(wt, "string") && strcmp(wt, "raw_string") &&
+                strcmp(wt, "expansion") && strcmp(wt, "simple_expansion") &&
+                strcmp(wt, "command_substitution")) {
+                continue;
+            }
+
             char *val = expand_node_to_text(w);
             var_set(varname, val ? val : "");
             free(val);
 
             loop_ctl = LOOP_NONE;
-            run_program(body);   // body is usually a list
+            run_body(body);   // use your unified body runner
 
             if (loop_ctl == LOOP_BREAK)    { loop_ctl = LOOP_NONE; break; }
             if (loop_ctl == LOOP_CONTINUE) { loop_ctl = LOOP_NONE; continue; }
@@ -1496,6 +1505,7 @@ if (strcmp(type, "for_statement") == 0) {
     free(varname);
     continue;
 }
+
 
 
 /* while ... do ... done */
@@ -1559,8 +1569,9 @@ if (strcmp(type, "if_statement") == 0) {
     TSNode last = ts_node_named_child(node, nc - 1);
     if (!ts_node_is_null(last) && strcmp(ts_node_type(last), "else_clause") == 0) {
         TSNode ebody = ts_node_named_child(last, 0);
-        run_body(ebody);
-    }
+        if (ts_node_is_null(ebody)) ebody = ts_node_named_child(last, 0);
+    	run_body(ebody);
+	}
     continue;
 }
 
